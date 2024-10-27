@@ -1,45 +1,34 @@
-use swc_core::ecma::transforms::testing::test;
-use swc_core::plugin::{plugin_transform, proxies::TransformPluginProgramMetadata};
 use swc_core::{
-    common::Spanned,
+    common::DUMMY_SP,
     ecma::{
-        ast::{op, Ident, Program},
-        transforms::testing::test_inline,
+        ast::{BlockStmt, ExprStmt, Program},
+        codegen::to_code,
+        transforms::testing::test,
         visit::{as_folder, FoldWith, VisitMut, VisitMutWith},
     },
+    plugin::{plugin_transform, proxies::TransformPluginProgramMetadata},
 };
 
 pub struct TransformVisitor;
 
 impl VisitMut for TransformVisitor {
-    // Implement necessary visit_mut_* methods for actual custom transform.
-    // A comprehensive list of possible visitor methods can be found here:
-    // https://rustdoc.swc.rs/swc_ecma_visit/trait.VisitMut.html
-
-    fn visit_mut_bin_expr(&mut self, node: &mut swc_core::ecma::ast::BinExpr) {
+    fn visit_mut_fn_decl(&mut self, node: &mut swc_core::ecma::ast::FnDecl) {
         node.visit_mut_children_with(self);
 
-        if node.op == op!("===") {
-            node.left = Box::new(Ident::new_no_ctxt("pranav".into(), node.left.span()).into())
-        }
+        let x = to_code(node);
+        let expr = ExprStmt {
+            span: DUMMY_SP,
+            expr: Box::new("hello world".into()),
+        };
+        let body = BlockStmt {
+            stmts: vec![expr.into()],
+            ..Default::default()
+        };
+        node.function.body = Some(body);
+        println!("yay! {x}");
     }
 }
 
-/// An example plugin function with macro support.
-/// `plugin_transform` macro interop pointers into deserialized structs, as well
-/// as returning ptr back to host.
-///
-/// It is possible to opt out from macro by writing transform fn manually
-/// if plugin need to handle low-level ptr directly via
-/// `__transform_plugin_process_impl(
-///     ast_ptr: *const u8, ast_ptr_len: i32,
-///     unresolved_mark: u32, should_enable_comments_proxy: i32) ->
-///     i32 /*  0 for success, fail otherwise.
-///             Note this is only for internal pointer interop result,
-///             not actual transform result */`
-///
-/// This requires manual handling of serialization / deserialization from ptrs.
-/// Refer swc_plugin_macro to see how does it work internally.
 #[plugin_transform]
 pub fn process_transform(program: Program, _metadata: TransformPluginProgramMetadata) -> Program {
     program.fold_with(&mut as_folder(TransformVisitor))
@@ -63,5 +52,8 @@ test!(
     Default::default(),
     |_| as_folder(TransformVisitor),
     wow,
-    r#"foo === bar;"#
+    r#"function MyCoolTest() {
+        "use prompt"
+    }
+    "#
 );

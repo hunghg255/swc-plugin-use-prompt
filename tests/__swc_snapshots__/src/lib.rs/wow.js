@@ -1,1 +1,3 @@
-pranav === bar;
+function MyCoolTest() {
+    "hello world";
+}
