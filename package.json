@@ -1,7 +1,7 @@
 {
   "name": "swc-plugin-use-prompt",
   "version": "0.1.0",
-  "description": "A satirical attempt at making a `use prompt` directive for React and NextJS.",
+  "description": "A satirical attempt at making a `use prompt` directive for React and Next.js.",
   "author": "Pranav Nutalapati",
   "license": "ISC",
   "keywords": [
@@ -12,9 +12,7 @@
   },
   "main": "target/wasm32-wasip1/release/use_prompt.wasm",
   "scripts": {
-    "prepublishOnly": "cargo build-wasi --release",
-    "build": "npm run build:wasm",
-    "build:wasm": "cargo build-wasi --release"
+    "prepublishOnly": "cargo build-wasi --release"
   },
   "type": "module",
   "files": [],
