@@ -1,24 +1,23 @@
 use std::{
     collections::HashMap,
-    fs::{self, File},
-    io::Read,
+    fs::{self},
     sync::Arc,
 };
 
 use serde::Deserialize;
 use swc_core::{
-    common::{BytePos, FileName, SourceFile, Span, Spanned, DUMMY_SP},
+    common::{BytePos, FileName, SourceFile, Span, Spanned},
     ecma::{
         ast::{
-            BlockStmt, EsVersion, Expr, ExprOrSpread, ExprStmt, Function, Ident, Lit, NewExpr,
-            Program, Stmt, ThrowStmt,
+            BlockStmt, EsVersion, Expr, ExprOrSpread, Function, Ident, Lit, NewExpr, Program, Stmt,
+            ThrowStmt,
         },
         parser::{parse_file_as_module, PResult, Syntax::Typescript, TsSyntax},
         visit::{as_folder, FoldWith, VisitMut, VisitMutWith},
     },
     plugin::{plugin_transform, proxies::TransformPluginProgramMetadata},
 };
-use wasix::{fd_prestat_get, fd_write, wasi::ERRNO_BADF, x::FD_STDOUT, Ciovec, Fd, FD_STDERR};
+use wasix::{fd_write, x::FD_STDOUT, Ciovec, Fd};
 
 fn write(fd: Fd, msg: &str) {
     let iov = Ciovec {
@@ -30,53 +29,8 @@ fn write(fd: Fd, msg: &str) {
     }
 }
 
-fn get_working_directory_fd() -> Option<Fd> {
-    unsafe {
-        for fd in 3..u32::MAX {
-            let res = fd_prestat_get(fd);
-            match res {
-                Ok(_) => return Some(fd),
-                Err(ERRNO_BADF) => {
-                    write(FD_STDERR, "no directory open");
-                    break;
-                }
-                Err(_) => {
-                    continue;
-                }
-            }
-        }
-    };
-    return None;
-}
-
-enum ParseMaybePromptError {
-    NotPrompt,
-    PromptEmpty,
-}
-/// Parse the stmt and extract the prompt to use (if present).
-fn parse_maybe_prompt(stmt: &Stmt) -> Result<String, ParseMaybePromptError> {
-    let literal = stmt
-        .as_expr()
-        .ok_or(ParseMaybePromptError::NotPrompt)?
-        .expr
-        .as_lit()
-        .ok_or(ParseMaybePromptError::NotPrompt)?;
-    let Lit::Str(str) = literal else {
-        Err(ParseMaybePromptError::NotPrompt)?
-    };
-    let str = str.value.as_str();
-
-    if !str.starts_with("use prompt:") {
-        Err(ParseMaybePromptError::NotPrompt)?;
-    };
-    let prompt = (&str[11..]).trim().to_owned();
-    if prompt.is_empty() {
-        Err(ParseMaybePromptError::PromptEmpty)?;
-    };
-
-    return Ok(prompt);
-}
-
+/// Generate an error message to be thrown at runtime.
+/// TODO: Maybe there's a nice way to throw compile-time errors from SWC Plugins?
 fn make_prompt_error_body(msg: &str) -> Option<BlockStmt> {
     let expr = ThrowStmt {
         arg: Box::new(
@@ -98,6 +52,8 @@ fn make_prompt_error_body(msg: &str) -> Option<BlockStmt> {
     })
 }
 
+/// Parse the given source block into a BlockStmt AST. Expected to be a function
+/// body.
 fn make_block_stmt_from_source(source: &str) -> PResult<BlockStmt> {
     let source_file = SourceFile::new(
         Arc::from(FileName::Anon),
@@ -118,6 +74,8 @@ fn make_block_stmt_from_source(source: &str) -> PResult<BlockStmt> {
         &mut errors,
     )?;
 
+    // This looks scary but it's fine because it's the exact shape we expect.
+    // Invalid inputs would have been caught by the `parse_file_as_module` call.
     let decl = ast.body[0]
         .as_stmt()
         .unwrap()
@@ -146,10 +104,12 @@ impl TransformVisitor {
             .expect("malformed substitutions json");
         let substitutions: SubstitutionMap =
             serde_json::from_str(&contents).expect("malformed substitutions json");
-        // write(FD_STDOUT, &format!("subst: {:?}", substitutions));
+
         Self { substitutions }
     }
 
+    /// Substitute the function body with the codegen'd one, matching using
+    /// the span and prompt. (Not perfect, but good enough.)
     fn transform_fn_body(self: &Self, func: &mut Function, span: Span) {
         let Some(body) = &func.body else {
             return;
@@ -211,7 +171,7 @@ impl TransformVisitor {
 
         if let Some(imports) = &subst.imports {
             func.body = make_prompt_error_body(&format!(
-                "It would appear you need to add some imports.\n{imports}"
+                "🤖 It would appear you need to add some imports.\n{imports}"
             ));
             return;
         };
@@ -219,7 +179,8 @@ impl TransformVisitor {
         match make_block_stmt_from_source(&subst.code) {
             Ok(body) => func.body = Some(body),
             Err(e) => {
-                func.body = make_prompt_error_body("Couldn't make it happen.");
+                func.body =
+                    make_prompt_error_body("🤖 Guess ChatGPT isn't great at writing code...");
                 write(FD_STDOUT, &format!("Error: {:?}\n", e));
             }
         };
@@ -243,9 +204,9 @@ impl VisitMut for TransformVisitor {
 }
 
 #[plugin_transform]
-pub fn process_transform(program: Program, metadata: TransformPluginProgramMetadata) -> Program {
-    // metadata.get_transform_plugin_config()
+pub fn process_transform(program: Program, _metadata: TransformPluginProgramMetadata) -> Program {
     program.fold_with(&mut as_folder(TransformVisitor::new(
-        "/cwd/node_modules/swc-plugin-use-prompt/.cache",
+        // Yeah it's hard-coded. Oh well.
+        "/cwd/node_modules/.swc-plugin-use-prompt-cache",
     )))
 }
