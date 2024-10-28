@@ -1,5 +1,9 @@
 # "use prompt"
 
+
+https://github.com/user-attachments/assets/94045065-c821-4660-88d2-d891e9b2ad4a
+
+
 Add compile-time GenAI to any SWC-powered project!
 
 ```tsx
