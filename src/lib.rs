@@ -19,6 +19,8 @@ use swc_core::{
 };
 use wasix::{fd_write, x::FD_STDOUT, Ciovec, Fd};
 
+const PROMPTS_FILE: &str = "node_modules/.swc-plugin-use-prompt/prompts";
+
 fn write(fd: Fd, msg: &str) {
     let iov = Ciovec {
         buf: msg.as_ptr(),
@@ -206,7 +208,7 @@ impl VisitMut for TransformVisitor {
 #[plugin_transform]
 pub fn process_transform(program: Program, _metadata: TransformPluginProgramMetadata) -> Program {
     program.fold_with(&mut as_folder(TransformVisitor::new(
-        // Yeah it's hard-coded. Oh well.
-        "/cwd/node_modules/.swc-plugin-use-prompt-cache",
+        // cwd gets mapped to /cwd by the swc plugin runner
+        &format!("/cwd/{PROMPTS_FILE}"),
     )))
 }

@@ -1,16 +1,27 @@
 {
-  "name": "first-attempt",
+  "name": "swc-plugin-use-prompt",
   "version": "0.1.0",
-  "description": "",
-  "author": "",
+  "description": "A satirical attempt at making a `use prompt` directive for React and NextJS.",
+  "author": "Pranav Nutalapati",
   "license": "ISC",
   "keywords": [
     "swc-plugin"
   ],
-  "main": "target/wasm32-wasip1/release/first_attempt.wasm",
-  "scripts": {
-    "prepublishOnly": "cargo build-wasi --release"
+  "bin": {
+    "use-prompt": "scripts/use-prompt.mjs"
   },
+  "main": "target/wasm32-wasip1/release/use_prompt.wasm",
+  "scripts": {
+    "prepublishOnly": "cargo build-wasi --release",
+    "build": "npm run build:wasm",
+    "build:wasm": "cargo build-wasi --release"
+  },
+  "type": "module",
   "files": [],
-  "preferUnplugged": true
+  "preferUnplugged": true,
+  "dependencies": {
+    "@next/env": "^15.0.1",
+    "@swc/core": "^1.7.40",
+    "openai": "^4.68.4"
+  }
 }

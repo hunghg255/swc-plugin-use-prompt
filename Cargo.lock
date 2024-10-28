@@ -300,16 +300,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e8c02a5121d4ea3eb16a80748c74f5549a5665e4c21333c6098f283870fbdea6"
 
 [[package]]
-name = "first-attempt"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "swc_core",
- "wasix",
-]
-
-[[package]]
 name = "form_urlencoded"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1740,6 +1730,16 @@ dependencies = [
  "form_urlencoded",
  "idna",
  "percent-encoding",
+]
+
+[[package]]
+name = "use_prompt"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "swc_core",
+ "wasix",
 ]
 
 [[package]]
