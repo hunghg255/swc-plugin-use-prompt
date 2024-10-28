@@ -22,6 +22,7 @@
   "dependencies": {
     "@next/env": "^15.0.1",
     "@swc/core": "^1.7.40",
+    "glob-watcher": "^6.0.0",
     "openai": "^4.68.4"
   }
 }

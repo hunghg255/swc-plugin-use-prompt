@@ -9,13 +9,13 @@ env.loadEnvConfig(process.cwd());
 /** @typedef {import('@swc/core').FunctionExpression} FunctionExpression */
 /** @typedef {import('@swc/core').Span} Span */
 
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
 import { Compiler } from "@swc/core";
+import watch from "glob-watcher";
 import OpenAI from "openai";
-
-const compiler = new Compiler();
 
 /**
  * really bad not-visitor-pattern, but im def not coding every single variant
@@ -47,6 +47,7 @@ function findFunctionDecls(root) {
   return found;
 }
 
+const compiler = new Compiler();
 /**
  * Find all uses of the `use prompt` directive in the given source.
  * Extract their associated positions and prompts.
@@ -57,9 +58,10 @@ async function identifyPromptRequests(source) {
   /** @type {Module} */
   let module;
   try {
-    module = await compiler.parse(source, {
+    module = compiler.parseSync(source, {
       syntax: "typescript",
       tsx: true,
+      isModule: true,
     });
   } catch (e) {
     console.error(e);
@@ -69,6 +71,10 @@ async function identifyPromptRequests(source) {
   const decls = findFunctionDecls(module).filter((decl) => decl.body);
   const prompts = decls
     .map((decl) => {
+      decl.span.start -= module.span.start - 1;
+      decl.span.end -= module.span.start - 1;
+      decl.body.span.start -= module.span.start - 1;
+      decl.body.span.end -= module.span.start - 1;
       const prologue = [];
       for (let expr of decl.body.stmts) {
         if (expr.type !== "ExpressionStatement") break;
@@ -98,7 +104,7 @@ async function identifyPromptRequests(source) {
   return requests;
 }
 
-const SYSTEM_PROMPT = `You are an expert React developer. Generate code that strictly adheres to the function signature provided. Do not generate additional functions. Exclude the function header from your response
+const SYSTEM_PROMPT = `You are an expert React developer. Generate code that strictly adheres to the function signature provided. Do not generate additional functions. Exclude the function header from your response.
 
 If you require any additional imports, include that in your response specifying exactly which functions and components need to be imported. Do not include an import for the React global.
 
@@ -126,15 +132,14 @@ async function getPromptResults(openai, source, prompt, signature) {
               text:
                 "This is the full source file:\n\n" +
                 "```tsx\n" +
-                // "import React from 'react';\n" +
+                "import React from 'react';\n" +
                 source +
                 "\n```\n\n" +
                 `Generate code to meet these requirements: ${prompt}` +
                 "\n\n" +
                 `It must strictly follow this function header: \`${signature}\`.` +
                 "\n\n" +
-                `Make sure to include the imports in a separate key.`,
-              // `Do not include an import for the React global. Do not include imports that are already present.`,
+                `Make sure to include the required library imports in a separate key. Do not include the function header your response.`,
             },
           ],
         },
@@ -161,15 +166,6 @@ async function getPromptResults(openai, source, prompt, signature) {
               imports: {
                 type: "string",
                 description: "Imports required, or an empty string if none.",
-                // anyOf: [
-                //   // {
-                //   //   type: "null",
-                //   //   description: "No additional imports are required",
-                //   // },
-                //   {
-                //     type: "string",
-                //   },
-                // ],
               },
             },
             additionalProperties: false,
@@ -179,11 +175,7 @@ async function getPromptResults(openai, source, prompt, signature) {
     });
     const res = rawResponse.choices[0];
     if (res.finish_reason !== "stop") return null;
-    console.log(res.message.content);
     let { code, imports } = JSON.parse(res.message.content);
-    // if (imports && (imports.trim() === "" || imports === "null"))
-    //   imports = null;
-    imports = null;
     return { code, imports };
   } catch (e) {
     console.error(e);
@@ -200,6 +192,8 @@ async function getPromptResults(openai, source, prompt, signature) {
  */
 async function getUpdatedCodegen(filePath, openai) {
   const source = (await fs.readFile(filePath)).toString();
+  if (!(await shouldHandleFile(filePath, source))) return;
+  console.log(`🤖 ${filePath} ...`);
   const requests = await identifyPromptRequests(source);
   if (!requests) return null;
   return (
@@ -213,37 +207,72 @@ async function getUpdatedCodegen(filePath, openai) {
   ).filter(Boolean);
 }
 
-async function updateCache(filePath, updates) {
-  let contents;
-  try {
-    contents = JSON.parse((await fs.readFile(filePath)).toString());
-  } catch (e) {
-    console.log("Creating new cache file...");
-    contents = {};
+function hashDigest(contents) {
+  return crypto.createHash("sha256").update(contents, "utf8").digest("hex");
+}
+
+let changes;
+
+try {
+  changes = JSON.parse(fsC.readFile(CHANGES_FILE).toString());
+} catch (e) {
+  console.log("Creating new changes file...");
+  changes = {};
+}
+
+async function shouldHandleFile(filePath, contents) {
+  const hash = hashDigest(contents);
+  // console.log(filePath, hash);
+
+  let should = false;
+  if (changes[filePath] !== hash) {
+    changes[filePath] = hash;
+    should = true;
+    await fs.writeFile(CHANGES_FILE, JSON.stringify(changes));
   }
 
+  return should;
+}
+
+let prompts;
+try {
+  prompts = JSON.parse(fsC.readFile(PROMPTS_FILE).toString());
+} catch (e) {
+  console.log("Creating new prompts file...");
+  prompts = {};
+}
+
+async function updatePromptsFile(updates) {
   for (let { span, prompt, value } of updates) {
-    if (!contents[span.start]) contents[span.start] = {};
-    if (!contents[span.start][span.end]) contents[span.start][span.end] = {};
-    contents[span.start][span.end][prompt] = value;
+    // console.log(span, prompt, value);
+    if (!prompts[span.start]) prompts[span.start] = {};
+    if (!prompts[span.start][span.end]) prompts[span.start][span.end] = {};
+    prompts[span.start][span.end][prompt] = value;
   }
 
-  await fs.writeFile(filePath, JSON.stringify(contents));
+  await fs.writeFile(PROMPTS_FILE, JSON.stringify(prompts));
 }
 
 async function initialize({
   apiKey = process.env.OPENAI_API_KEY,
-  watchDir,
+  watchPatterns = ["app/**/*.{tsx,jsx,ts,js}"],
 } = {}) {
   await fs.mkdir(path.dirname(PROMPTS_FILE), { recursive: true });
   const openai = new OpenAI({ apiKey });
-  const updates = await getUpdatedCodegen(
-    "/Users/Pranav_Nutalapati/Projects/preyneyv/use-prompt-directive/demo/app/page.tsx",
-    // "/Users/Pranav_Nutalapati/Projects/preyneyv/use-prompt-directive/test/file.js",
-    openai,
-  );
-  if (!updates) return;
-  await updateCache(PROMPTS_FILE, updates);
+
+  const watcher = watch(watchPatterns, { ignoreInitial: false });
+
+  async function processPath(path) {
+    const updates = await getUpdatedCodegen(path, openai);
+    if (!updates) {
+      return;
+    }
+    await updatePromptsFile(updates);
+    await fs.utimes(path, new Date(), new Date());
+    console.log(`✅ ${path} is  ✨ e n h a n c e d ✨`);
+  }
+  watcher.on("add", processPath);
+  watcher.on("change", processPath);
 }
 
 initialize();

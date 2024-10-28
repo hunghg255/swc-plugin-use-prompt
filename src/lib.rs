@@ -6,30 +6,21 @@ use std::{
 
 use serde::Deserialize;
 use swc_core::{
-    common::{BytePos, FileName, SourceFile, Span, Spanned},
+    atoms::Atom,
+    common::{BytePos, FileName, SourceFile, Span, Spanned, DUMMY_SP},
     ecma::{
         ast::{
-            BlockStmt, EsVersion, Expr, ExprOrSpread, Function, Ident, Lit, NewExpr, Program, Stmt,
-            ThrowStmt,
+            BlockStmt, EsVersion, Expr, ExprOrSpread, Function, Ident, ImportDecl,
+            ImportDefaultSpecifier, ImportPhase, ImportSpecifier, Lit, Module, ModuleDecl,
+            ModuleExportName, ModuleItem, NewExpr, Program, Stmt, ThrowStmt,
         },
         parser::{parse_file_as_module, PResult, Syntax::Typescript, TsSyntax},
         visit::{as_folder, FoldWith, VisitMut, VisitMutWith},
     },
     plugin::{plugin_transform, proxies::TransformPluginProgramMetadata},
 };
-use wasix::{fd_write, x::FD_STDOUT, Ciovec, Fd};
 
 const PROMPTS_FILE: &str = "node_modules/.swc-plugin-use-prompt/prompts";
-
-fn write(fd: Fd, msg: &str) {
-    let iov = Ciovec {
-        buf: msg.as_ptr(),
-        buf_len: msg.len(),
-    };
-    unsafe {
-        fd_write(fd, &[iov]).expect("failed to write message");
-    }
-}
 
 /// Generate an error message to be thrown at runtime.
 /// TODO: Maybe there's a nice way to throw compile-time errors from SWC Plugins?
@@ -54,18 +45,17 @@ fn make_prompt_error_body(msg: &str) -> Option<BlockStmt> {
     })
 }
 
-/// Parse the given source block into a BlockStmt AST. Expected to be a function
-/// body.
-fn make_block_stmt_from_source(source: &str) -> PResult<BlockStmt> {
+fn make_module_from_source(source: &str) -> PResult<Module> {
     let source_file = SourceFile::new(
         Arc::from(FileName::Anon),
         false,
         Arc::from(FileName::Anon),
-        format!("function wrapped() {{ {source} }}"),
+        source.to_owned(),
         BytePos(0),
     );
     let mut errors = vec![];
-    let ast = parse_file_as_module(
+
+    parse_file_as_module(
         &source_file,
         Typescript(TsSyntax {
             tsx: true,
@@ -74,18 +64,94 @@ fn make_block_stmt_from_source(source: &str) -> PResult<BlockStmt> {
         EsVersion::EsNext,
         None,
         &mut errors,
-    )?;
+    )
+}
 
+type IdentMap = HashMap<Atom, Atom>;
+
+/// Replace Idents with other Idents as specified by IdentMap
+struct RenameIdentVisitor {
+    pub ident_map: IdentMap,
+}
+
+impl RenameIdentVisitor {
+    pub fn new(ident_map: IdentMap) -> Self {
+        Self { ident_map }
+    }
+}
+impl VisitMut for RenameIdentVisitor {
+    fn visit_mut_ident(&mut self, node: &mut Ident) {
+        if let Some(replacement) = self.ident_map.get(&node.sym) {
+            node.sym = replacement.clone();
+        }
+    }
+}
+
+/// Parse the given source block into a BlockStmt AST. Expected to be a function
+/// body.
+fn make_block_stmt_from_source(source: &str, ident_map: IdentMap) -> PResult<BlockStmt> {
+    let mut ast = make_module_from_source(&format!("function wrapped() {{ {source} }}"))?;
     // This looks scary but it's fine because it's the exact shape we expect.
     // Invalid inputs would have been caught by the `parse_file_as_module` call.
     let decl = ast.body[0]
-        .as_stmt()
+        .as_mut_stmt()
         .unwrap()
-        .as_decl()
+        .as_mut_decl()
         .unwrap()
-        .as_fn_decl()
+        .as_mut_fn_decl()
         .unwrap();
+
+    let mut vis = RenameIdentVisitor::new(ident_map);
+    vis.visit_mut_fn_decl(decl);
     Ok(decl.function.body.clone().unwrap())
+}
+
+/// Rename imports to prefix, and capture renamed things in an IdentMap
+struct RenameImportsVisitor {
+    prefix: String,
+    pub ident_map: IdentMap,
+}
+impl RenameImportsVisitor {
+    pub fn new(prefix: &str) -> Self {
+        Self {
+            prefix: prefix.to_owned(),
+            ident_map: HashMap::new(),
+        }
+    }
+}
+impl VisitMut for RenameImportsVisitor {
+    fn visit_mut_import_decl(&mut self, node: &mut swc_core::ecma::ast::ImportDecl) {
+        node.specifiers.iter_mut().for_each(|spec| {
+            match spec {
+                ImportSpecifier::Named(import_named_specifier) => {
+                    let key = import_named_specifier.local.sym.clone();
+                    let pfxed: Atom = format!("{}{key}", self.prefix).into();
+                    self.ident_map.insert(key.clone(), pfxed.clone());
+                    import_named_specifier.local.sym = pfxed;
+                    import_named_specifier.imported = Some(ModuleExportName::Ident(key.into()));
+                }
+                ImportSpecifier::Default(import_default_specifier) => {
+                    let key = import_default_specifier.local.sym.clone();
+                    let pfxed: Atom = format!("{}{key}", self.prefix).into();
+                    self.ident_map.insert(key.clone(), pfxed.clone());
+                    import_default_specifier.local.sym = pfxed;
+                }
+                ImportSpecifier::Namespace(import_star_as_specifier) => {
+                    let key = import_star_as_specifier.local.sym.clone();
+                    let pfxed: Atom = format!("{}{key}", self.prefix).into();
+                    self.ident_map.insert(key.clone(), pfxed.clone());
+                    import_star_as_specifier.local.sym = pfxed;
+                }
+            };
+        });
+    }
+}
+
+fn make_imports_from_source(source: &str, prefix: &str) -> PResult<(Vec<ModuleItem>, IdentMap)> {
+    let mut ast = make_module_from_source(source)?;
+    let mut vis = RenameImportsVisitor::new(prefix);
+    vis.visit_mut_module(&mut ast);
+    Ok((ast.body, vis.ident_map.clone()))
 }
 
 #[derive(Deserialize, Debug)]
@@ -96,23 +162,29 @@ struct Substitution {
 
 type SubstitutionMap = HashMap<String, HashMap<String, HashMap<String, Substitution>>>;
 
-pub struct TransformVisitor {
+pub struct SubstitutionVisitor {
     substitutions: SubstitutionMap,
+    imports: Vec<ModuleItem>,
+    visited: u32,
 }
 
-impl TransformVisitor {
+impl SubstitutionVisitor {
     pub fn new(cache_file: &str) -> Self {
         let contents = String::from_utf8(fs::read(cache_file).unwrap_or(b"{}".to_vec()))
             .expect("malformed substitutions json");
         let substitutions: SubstitutionMap =
             serde_json::from_str(&contents).expect("malformed substitutions json");
 
-        Self { substitutions }
+        Self {
+            substitutions,
+            imports: vec![],
+            visited: 0,
+        }
     }
 
     /// Substitute the function body with the codegen'd one, matching using
     /// the span and prompt. (Not perfect, but good enough.)
-    fn transform_fn_body(self: &Self, func: &mut Function, span: Span) {
+    fn transform_fn_body(self: &mut Self, func: &mut Function, span: Span) {
         let Some(body) = &func.body else {
             return;
         };
@@ -152,10 +224,9 @@ impl TransformVisitor {
             return;
         };
 
-        write(
-            FD_STDOUT,
-            &format!("{} {} {}\n", span.lo.0, span.hi.0, prompt),
-        );
+        let visit_index = self.visited;
+        self.visited += 1;
+
         let subst = match self.substitutions.get(&span.lo.0.to_string()) {
             Some(m) => match m.get(&span.hi.0.to_string()) {
                 Some(m) => m.get(&prompt),
@@ -165,31 +236,40 @@ impl TransformVisitor {
         };
 
         let Some(subst) = subst else {
-            func.body = make_prompt_error_body(
-                "🤖 Missing substitution data. Whoops that's probably my fault.",
+            println!(
+                "Waiting for substitution data. ({} {} {})",
+                span.lo.0, span.hi.0, prompt
             );
             return;
         };
 
+        let mut ident_map: IdentMap = HashMap::new();
         if let Some(imports) = &subst.imports {
-            func.body = make_prompt_error_body(&format!(
-                "🤖 It would appear you need to add some imports.\n{imports}"
-            ));
-            return;
+            let prefix = format!("__swcPluginUsePromptImport__{visit_index}_");
+            match make_imports_from_source(imports, &prefix) {
+                Ok((new_imports, new_ident_map)) => {
+                    self.imports.extend(new_imports);
+                    ident_map = new_ident_map;
+                }
+                Err(e) => {
+                    func.body = make_prompt_error_body(&format!("uh oh: {:?}", e));
+                    return;
+                }
+            }
         };
 
-        match make_block_stmt_from_source(&subst.code) {
+        match make_block_stmt_from_source(&subst.code, ident_map) {
             Ok(body) => func.body = Some(body),
             Err(e) => {
                 func.body =
                     make_prompt_error_body("🤖 Guess ChatGPT isn't great at writing code...");
-                write(FD_STDOUT, &format!("Error: {:?}\n", e));
+                println!("Error: {:?}\n", e);
             }
         };
     }
 }
 
-impl VisitMut for TransformVisitor {
+impl VisitMut for SubstitutionVisitor {
     fn visit_mut_fn_decl(&mut self, node: &mut swc_core::ecma::ast::FnDecl) {
         node.visit_mut_children_with(self);
 
@@ -203,12 +283,61 @@ impl VisitMut for TransformVisitor {
         let span = node.span();
         self.transform_fn_body(&mut node.function, span);
     }
+
+    fn visit_mut_module(&mut self, node: &mut Module) {
+        node.visit_mut_children_with(self);
+
+        node.body.extend(self.imports.clone());
+    }
+}
+
+struct FixImportsVisitor {
+    has_react: bool,
+}
+
+impl VisitMut for FixImportsVisitor {
+    fn visit_mut_import_decl(&mut self, node: &mut swc_core::ecma::ast::ImportDecl) {
+        node.specifiers.iter_mut().for_each(|spec| {
+            let sym = match spec {
+                ImportSpecifier::Named(import_named_specifier) => &import_named_specifier.local.sym,
+                ImportSpecifier::Default(import_default_specifier) => {
+                    &import_default_specifier.local.sym
+                }
+                ImportSpecifier::Namespace(import_star_as_specifier) => {
+                    &import_star_as_specifier.local.sym
+                }
+            };
+            if sym.to_string().eq("React") {
+                self.has_react = true;
+            }
+        });
+    }
+
+    fn visit_mut_module(&mut self, node: &mut Module) {
+        node.visit_mut_children_with(self);
+
+        if !self.has_react {
+            node.body
+                .push(ModuleItem::ModuleDecl(ModuleDecl::Import(ImportDecl {
+                    span: DUMMY_SP,
+                    specifiers: vec![ImportSpecifier::Default(ImportDefaultSpecifier {
+                        span: DUMMY_SP,
+                        local: Ident::from(Atom::from("React")),
+                    })],
+                    type_only: false,
+                    with: None,
+                    phase: ImportPhase::Evaluation,
+                    src: Box::new("react".into()),
+                })));
+        }
+    }
 }
 
 #[plugin_transform]
 pub fn process_transform(program: Program, _metadata: TransformPluginProgramMetadata) -> Program {
-    program.fold_with(&mut as_folder(TransformVisitor::new(
+    let program = program.fold_with(&mut as_folder(SubstitutionVisitor::new(
         // cwd gets mapped to /cwd by the swc plugin runner
         &format!("/cwd/{PROMPTS_FILE}"),
-    )))
+    )));
+    program.fold_with(&mut as_folder(FixImportsVisitor { has_react: false }))
 }
