@@ -10,7 +10,7 @@ use swc_core::{
     common::{BytePos, FileName, SourceFile, Span, Spanned, DUMMY_SP},
     ecma::{
         ast::{
-            BlockStmt, EsVersion, Expr, ExprOrSpread, Function, Ident, ImportDecl,
+            BlockStmt, EsVersion, Expr, ExprOrSpread, ExprStmt, Function, Ident, ImportDecl,
             ImportDefaultSpecifier, ImportPhase, ImportSpecifier, Lit, Module, ModuleDecl,
             ModuleExportName, ModuleItem, NewExpr, Program, Stmt, ThrowStmt,
         },
@@ -20,7 +20,8 @@ use swc_core::{
     plugin::{plugin_transform, proxies::TransformPluginProgramMetadata},
 };
 
-const PROMPTS_FILE: &str = "node_modules/.swc-plugin-use-prompt/prompts";
+// cwd gets mapped to /cwd by the swc plugin runner.
+const PROMPTS_FILE: &str = "/cwd/node_modules/.swc-plugin-use-prompt/prompts";
 
 /// Generate an error message to be thrown at runtime.
 /// TODO: Maybe there's a nice way to throw compile-time errors from SWC Plugins?
@@ -236,10 +237,7 @@ impl SubstitutionVisitor {
         };
 
         let Some(subst) = subst else {
-            println!(
-                "Waiting for substitution data. ({} {} {})",
-                span.lo.0, span.hi.0, prompt
-            );
+            println!("⌛ Waiting for component generation...");
             return;
         };
 
@@ -287,12 +285,45 @@ impl VisitMut for SubstitutionVisitor {
     fn visit_mut_module(&mut self, node: &mut Module) {
         node.visit_mut_children_with(self);
 
+        if self.visited > 0 {
+            // ensure "use client"
+            let has_client_directive = node
+                .body
+                .iter()
+                .find(|item| match item {
+                    ModuleItem::Stmt(stmt) => match stmt {
+                        Stmt::Expr(stmt) => match stmt.expr.as_lit() {
+                            Some(Lit::Str(str)) => str.value.as_str().eq("use client"),
+                            _ => false,
+                        },
+                        _ => false,
+                    },
+                    _ => false,
+                })
+                .is_some();
+
+            if !has_client_directive {
+                node.body.insert(
+                    0,
+                    ModuleItem::Stmt(Stmt::Expr(ExprStmt {
+                        span: DUMMY_SP,
+                        expr: Box::new(Expr::Lit(Lit::Str("use client".into()))),
+                    })),
+                );
+            }
+        }
+
         node.body.extend(self.imports.clone());
     }
 }
 
 struct FixImportsVisitor {
     has_react: bool,
+}
+impl FixImportsVisitor {
+    pub fn new() -> Self {
+        Self { has_react: false }
+    }
 }
 
 impl VisitMut for FixImportsVisitor {
@@ -335,9 +366,6 @@ impl VisitMut for FixImportsVisitor {
 
 #[plugin_transform]
 pub fn process_transform(program: Program, _metadata: TransformPluginProgramMetadata) -> Program {
-    let program = program.fold_with(&mut as_folder(SubstitutionVisitor::new(
-        // cwd gets mapped to /cwd by the swc plugin runner
-        &format!("/cwd/{PROMPTS_FILE}"),
-    )));
-    program.fold_with(&mut as_folder(FixImportsVisitor { has_react: false }))
+    let program = program.fold_with(&mut as_folder(SubstitutionVisitor::new(PROMPTS_FILE)));
+    program.fold_with(&mut as_folder(FixImportsVisitor::new()))
 }
