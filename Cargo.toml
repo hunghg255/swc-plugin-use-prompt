@@ -11,6 +11,7 @@ lto = true
 
 [dependencies]
 serde = "1"
+serde_json = "1.0.132"
 swc_core = { version = "0.101.*", features = [
     "ecma_plugin_transform",
     "ecma_codegen",
