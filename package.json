@@ -1,6 +1,6 @@
 {
   "name": "swc-plugin-use-prompt",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A satirical attempt at making a `use prompt` directive for React and Next.js.",
   "author": "Pranav Nutalapati",
   "license": "ISC",
@@ -20,6 +20,7 @@
   "dependencies": {
     "@next/env": "^15.0.1",
     "@swc/core": "^1.7.40",
+    "commander": "^12.1.0",
     "glob-watcher": "^6.0.0",
     "openai": "^4.68.4"
   }

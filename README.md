@@ -43,6 +43,7 @@ export default function Home() {
    ```
 
 3. Run `pnpm use-prompt` alongside your regular build step!
+   > By default, this will watch your `app` and `src` directories for JS and TS files, but you can change this using the `-p` option.
 
 Check out [the Next.js example](./examples/nextjs-app-router-basic) to see it in action.
 

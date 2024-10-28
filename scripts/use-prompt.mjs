@@ -14,6 +14,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { Compiler } from "@swc/core";
+import { Command, Option } from "commander";
 import watch from "glob-watcher";
 import OpenAI from "openai";
 
@@ -216,7 +217,6 @@ let changes;
 try {
   changes = JSON.parse(fsC.readFile(CHANGES_FILE).toString());
 } catch (e) {
-  console.log("Creating new changes file...");
   changes = {};
 }
 
@@ -238,7 +238,6 @@ let prompts;
 try {
   prompts = JSON.parse(fsC.readFile(PROMPTS_FILE).toString());
 } catch (e) {
-  console.log("Creating new prompts file...");
   prompts = {};
 }
 
@@ -253,14 +252,13 @@ async function updatePromptsFile(updates) {
   await fs.writeFile(PROMPTS_FILE, JSON.stringify(prompts));
 }
 
-async function initialize({
-  apiKey = process.env.OPENAI_API_KEY,
-  watchPatterns = ["app/**/*.{tsx,jsx,ts,js}"],
-} = {}) {
+async function initialize({ patterns, apiKey }) {
+  console.log(`👀 Watching ${patterns.join(", ")}`);
+
   await fs.mkdir(path.dirname(PROMPTS_FILE), { recursive: true });
   const openai = new OpenAI({ apiKey });
 
-  const watcher = watch(watchPatterns, { ignoreInitial: false });
+  const watcher = watch(patterns, { ignoreInitial: false });
 
   async function processPath(path) {
     const updates = await getUpdatedCodegen(path, openai);
@@ -275,4 +273,23 @@ async function initialize({
   watcher.on("change", processPath);
 }
 
-initialize();
+const program = new Command();
+program
+  .name("use-prompt")
+  .description(
+    "Compile-time GenAI!\n\nPre-build step to parse prompts and generate an intermediate cache file.",
+  )
+  .addOption(
+    new Option("-k, --api-key <string>", "openai api key").env(
+      "OPENAI_API_KEY",
+    ),
+  )
+  .addOption(
+    new Option("-p, --patterns <patterns...>", "patterns to watch").default([
+      "app/**/*.{tsx,jsx,ts,js}",
+      "src/**/*.{tsx,jsx,ts,js}",
+    ]),
+  )
+  .action(initialize);
+
+program.parse();
