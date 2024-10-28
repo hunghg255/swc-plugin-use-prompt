@@ -1,5 +1,7 @@
 # Example with Next.js
 
+[![Edit swc-plugin-use-prompt](https://codesandbox.io/static/img/play-codesandbox.svg)](https://codesandbox.io/p/devbox/swc-plugin-use-prompt-m73dsf?embed=1)
+
 ## Setup
 
 1. Bootstrap a Next.js project and add this plugin.

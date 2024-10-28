@@ -12,6 +12,10 @@ export default function Home() {
 }
 ```
 
+Try it out for yourself!
+
+[![Edit swc-plugin-use-prompt](https://codesandbox.io/static/img/play-codesandbox.svg)](https://codesandbox.io/p/devbox/swc-plugin-use-prompt-m73dsf?embed=1)
+
 ## Installation
 
 1. Add the package as a dependency:
