@@ -1,14 +1,16 @@
 {
-    "name": "first-attempt",
-    "version": "0.1.0",
-    "description": "",
-    "author": "",
-    "license": "ISC",
-    "keywords": ["swc-plugin"],
-    "main": "target/wasm32-wasi/release/first_attempt.wasm",
-    "scripts": {
-        "prepublishOnly": "cargo build-wasi --release"
-    },
-    "files": [],
-    "preferUnplugged": true
+  "name": "first-attempt",
+  "version": "0.1.0",
+  "description": "",
+  "author": "",
+  "license": "ISC",
+  "keywords": [
+    "swc-plugin"
+  ],
+  "main": "target/wasm32-wasip1/release/first_attempt.wasm",
+  "scripts": {
+    "prepublishOnly": "cargo build-wasi --release"
+  },
+  "files": [],
+  "preferUnplugged": true
 }

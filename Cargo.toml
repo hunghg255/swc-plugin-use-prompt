@@ -14,4 +14,7 @@ serde = "1"
 swc_core = { version = "0.101.*", features = [
     "ecma_plugin_transform",
     "ecma_codegen",
+    "ecma_parser",
+    "typescript",
 ] }
+wasix = "0.12.21"

@@ -1,3 +1,0 @@
-function MyCoolTest() {
-    "hello world";
-}
